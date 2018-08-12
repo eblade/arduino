@@ -1,0 +1,4 @@
+*.pyc
+Pipfile.lock
+libraries
+*.swp
