@@ -78,6 +78,8 @@ uint16_t drawer = 0;
 void loop() {
     readKnobs();
     readButtons();
+    dac1.setVoltage(knob[0] << 2, false);
+    dac2.setVoltage(knob[1] << 2, false);
 
     uint8_t i;
     for (i = 0; i < KNOBS; i++) {
