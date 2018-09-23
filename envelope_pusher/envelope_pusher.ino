@@ -5,7 +5,7 @@
 #include <FastADC.h>
 
 // Display
-//SSD1306AsciiWire oled;
+SSD1306AsciiWire oled;
 
 //uint8_t col[2]; // Columns for ADC values.
 //uint8_t rows; // Rows per line.
@@ -59,11 +59,11 @@ void setup() {
     // Setup display
     Wire.begin();
     TWBR = 12; // 400 khz
-    //oled.begin(&Adafruit128x64, 0x3C);
-    //oled.displayRemap(true); // rotate 180 deg
-    //oled.setFont(System5x7);
-    //oled.clear();
-    //oled.println("Envelope Pusher");
+    oled.begin(&Adafruit128x64, 0x3C);
+    oled.displayRemap(true); // rotate 180 deg
+    oled.setFont(System5x7);
+    oled.clear();
+    oled.println("Envelope Pusher");
     //oled.println("A: 9999 C: 9999");
     //oled.println("B: 9999 D: 9999");
     //oled.println("A: 9999 C: 9999");
