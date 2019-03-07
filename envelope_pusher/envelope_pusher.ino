@@ -117,6 +117,8 @@ void setup() {
     //analog.handle(3, DEFAULT, handleKnob3);
 }
 
+unsigned int plot_position;
+
 void loop() {
     //readButtons();
 
@@ -125,8 +127,8 @@ void loop() {
     pB_attack = (ADC_MAX - analogRead(2)) >> 2 + 1;
     pB_release = (ADC_MAX - analogRead(3)) >> 2 + 1;
 
-    //oled.clearField(0, 1, 5);
-    //oled.print(a);
+    oled.clearField(0, 1, 5);
+    oled.print(a);
 
     //a += 100;
     //if (a > 4000) a = 0;
@@ -152,6 +154,12 @@ void loop() {
     //oled.print(a);
 
     //delay(10);
+
+    //if (plot_position < 128) {
+    //    int plot_a_value = a >> 4;
+    //    oled.
+    //    plot_position++;
+    //}
 }
 
 //uint16_t r(uint16_t t, uint16_t r) {
@@ -213,6 +221,7 @@ void release(uint16_t *value, uint16_t release) {
 void change() {
     if (digitalRead(INPUT_TRIG) == HIGH) {
         rising = true;
+        plot_position = 0;
     } else {
         rising = false;
     }
