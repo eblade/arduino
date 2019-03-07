@@ -1,0 +1,54 @@
+
+#define ROW_COUNT 5
+#define COL_COUNT 4
+
+#define ROW0 9 // blue
+#define ROW1 8 // white
+#define ROW2 7 // grey
+#define ROW3 6 // purple
+#define ROW4 5 // orange
+
+#define COL0 18 // A0 yellow
+#define COL1 19 // A1 red
+#define COL2 20 // A2 brown
+#define COL3 21 // A3 green
+
+char row_pins[ROW_COUNT] = {ROW0, ROW1, ROW2, ROW3, ROW4};
+char col_pins[COL_COUNT] = {COL0, COL1, COL2, COL3};
+
+bool state[ROW_COUNT][COL_COUNT] = {};
+
+void setup() {
+    Serial.begin(9600);
+
+    for (char i=0; i<COL_COUNT; i++) {
+        pinMode(col_pins[i], OUTPUT);
+        digitalWrite(col_pins[i], LOW);
+    }
+    for (char i=0; i<ROW_COUNT; i++) {
+        pinMode(row_pins[i], INPUT);
+    }
+}
+
+void loop() {
+    delay(1000);
+    scan();
+}
+
+void scan() {
+    Serial.println(">>>");
+    for (char col=0; col<COL_COUNT; col++) {
+        digitalWrite(col_pins[col], HIGH);
+        for (char row=0; row<ROW_COUNT; row++) {
+            bool pressed = digitalRead(row_pins[row]) == HIGH;
+            state[row][col] = pressed;
+            if (pressed) {
+                Serial.print("> ");
+                Serial.print(row, DEC);
+                Serial.print(", ");
+                Serial.println(col, DEC);
+            }
+        }
+        digitalWrite(col_pins[col], LOW);
+    }
+}
