@@ -23,7 +23,7 @@ SSD1306AsciiAvrI2c oled;
 
 //RobotDyn MOSFET
 #define FAN 5
-unsigned int fanDuty = 0, lastFanDuty;
+unsigned int fanDuty = 255, lastFanDuty;
 
 
 //MAX6675
@@ -40,7 +40,6 @@ MAX6675 thermocouple(THERMO_CLK, THERMO_CS, THERMO_DO);
 #define U_SAMPLES 0x10
 #define U_KP 0x20
 #define U_KI 0x40
-#define U_SET 0x80
 uint8_t displayUpdate = 0xff;
 uint16_t nSamples = 0;
 
@@ -54,14 +53,8 @@ uint16_t nSamples = 0;
 // States and such
 #define STATE_IDLE 0
 #define STATE_RUNNING 1
-#define SET_SETPOINT 0
-#define SET_KP 1
-#define SET_KI 2
-#define SET_MIN SET_SETPOINT
-#define SET_MAX SET_KI
 unsigned char state = STATE_IDLE;
-unsigned char set = SET_SETPOINT;
-unsigned int parReading = 0, valReading = 0;
+unsigned int lastA = 0, lastB = 0;
 
 /*working variables*/
 unsigned long previousTime, elapsedTime, currentTime;
@@ -109,7 +102,6 @@ void init_lcd() {
 }
 
 void prepare_lcd(unsigned int row) {
-    oled.setInvertMode(false);
     oled.setRow(row);
     oled.setCol(VALUE_COLUMN);
     oled.print("      ");
@@ -122,9 +114,6 @@ void update_lcd() {
         return;
     }
     lcd_update = 0;
-    if (displayUpdate & U_SET) {
-        displayUpdate = ~U_SET;
-    }
 
     if (displayUpdate & U_TEMP_IN) {
         prepare_lcd(0);
@@ -133,7 +122,6 @@ void update_lcd() {
     }
     if (displayUpdate & U_TEMP_SET) {
         prepare_lcd(1);
-        oled.setInvertMode(set == SET_SETPOINT);
         oled.print(tempSetPoint);
         displayUpdate &= ~U_TEMP_SET;
     }
@@ -154,13 +142,11 @@ void update_lcd() {
     }
     if (displayUpdate & U_KP) {
         prepare_lcd(5);
-        oled.setInvertMode(set == SET_KP);
         oled.print(kp);
         displayUpdate &= ~U_KP;
     }
     if (displayUpdate & U_KI) {
         prepare_lcd(6);
-        oled.setInvertMode(set == SET_KI);
         oled.print(ki);
         displayUpdate &= ~U_KI;
     }
@@ -192,39 +178,25 @@ int Compute() {
   return pTerm + iTerm;
 }
 
-void readPar() {
-    unsigned int newParReading = analogRead(PARAMETER);
-    if (abs(parReading - newParReading) < 16) {
+void readA() {
+    unsigned int newA = analogRead(PARAMETER);
+    if (abs(lastA - newA) < 16) {
         return;
     }
-    parReading = newParReading;
-    unsigned char oldSet = set;
-    set = map(parReading, 0, 1023, SET_MIN, SET_MAX);
-    if (oldSet != set) {
-        displayUpdate |= U_SET;
-    }
+    lastA = newA;
+    fanDuty = map(newA, 0, 1023, 25, 255);
+    analogWrite(FAN, fanDuty);
+    displayUpdate |= U_FAN;
 }
 
-void readVal() {
-    unsigned int newValReading = analogRead(VALUE);
-    if (abs(valReading - newValReading) < 16) {
+void readB() {
+    unsigned int newB = analogRead(VALUE);
+    if (abs(lastB - newB) < 16) {
         return;
     }
-    valReading = newValReading;
-    switch (set) {
-        case SET_SETPOINT:
-            tempSetPoint = map(valReading, 0, 1023, 0, 400);
-            displayUpdate |= U_TEMP_SET;
-            break;
-        case SET_KP:
-            kp = ((float)map(valReading, 0, 1023, 0, 1000))/10.;
-            displayUpdate |= U_KP;
-            break;
-        case SET_KI:
-            ki = ((float)map(valReading, 0, 1023, 0, 1000))/100.;
-            displayUpdate |= U_KI;
-            break;
-    }
+    lastB = newB;
+    tempSetPoint = map(newB, 0, 1023, 40, 400);
+    displayUpdate |= U_TEMP_SET;
 }
 
 void loop() {
@@ -244,22 +216,6 @@ void loop() {
             displayUpdate |= U_TEMP_IN;
         }
 
-        bool fanChanged = false;
-        if (tempIn > 300. && fanDuty < 230) {
-            fanDuty = 230;
-            fanChanged = true;
-        } else if (tempIn > 50.) {
-            fanDuty = map(tempIn, 50, 300, 25, 230);
-            fanChanged = true;
-        } else if (fanDuty > 0) {
-            fanDuty = 0;
-            fanChanged = true;
-        }
-        if (fanChanged) {
-            displayUpdate |= U_FAN;
-            analogWrite(FAN, fanDuty);
-        }
-
         tempOut = constrain(Compute(), outMin, outMax);
         unsigned int powerLast = power;
         power = map(tempOut, outMax, outMin, 100, 0);
@@ -270,8 +226,8 @@ void loop() {
         nSamples++;
         displayUpdate |= U_SAMPLES;
 
-        readPar();
-        readVal();
+        readA();
+        readB();
     }
 
     update_lcd();
