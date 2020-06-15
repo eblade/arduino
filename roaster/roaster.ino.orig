@@ -1,0 +1,247 @@
+/*
+Zerocross från AC dimmer modul kopplad till D2 med interrupt flagga.
+Startar interrupt timer för att aktivera triac efter viss tid som bestäms av värdet i OCR1A register.
+
+Värdet av OCR1A register styrs av PI(D) rutin som räknas ut från faktisk temperatur (thermocouple) och önskat värde Setpoint
+
+Majoriteten av resterande kod är för LCD display rutin, läsa en rotary encoder och PWM för fläktkontroll.
+*/
+
+
+#include <Wire.h>                     // Library for I2C communication
+#include <max6675.h>                  // Library for Thermocouple
+#include <LiquidCrystal_I2C.h>        // Library for LCD
+
+//ROBOTDYN AC DIMMER
+#define zeroCross  2
+#define triacGate 3             //initialase port for dimmer: name(PinNumber);
+
+//RobotDyn MOSFET
+#define fanPin 5
+int FanDuty = 100, FanValue = 255, lastFanDuty;
+
+
+//MAX6675
+#define thermoCLK 6
+#define thermoCS  7
+#define thermoDO  8
+MAX6675 thermocouple(thermoCLK, thermoCS, thermoDO);
+
+//ROTARY ENCODER
+#define clkPin  10
+#define dtPin   11
+#define swPin   12
+int swCount = 3, swState = 0, last_swState = 0, last_swCount;
+
+//LCD
+LiquidCrystal_I2C lcd = LiquidCrystal_I2C(0x27, 20, 4);  // Wiring: SDA pin is connected to A4 and SCL pin to A5.
+int xPos[] = { 0, 0, 12, 12};
+int yPos[] = { 1, 2, 0, 1};
+char buffer[3];
+char arrow = 0x7E;
+bool lcdUpdate = true;
+
+/*working variables*/
+unsigned long previousTime, elapsedTime, currentTime;
+int sampleTime = 250;
+float Input, Output, Setpoint = 0;
+float pTerm, iTerm, dTerm, lastSetpoint = 1;
+float kp = 30.0, ki = 1.2;
+float lastkp = 0.0, lastki = 0.0;
+float outMin = 43, outMax = 557;
+int Power;
+
+void setup() {
+  pinMode(zeroCross, INPUT_PULLUP);
+  pinMode(triacGate, OUTPUT);
+  pinMode(clkPin, INPUT);
+  pinMode(dtPin, INPUT);
+  pinMode(swPin, INPUT);
+  pinMode(fanPin, OUTPUT);
+
+  OCR1A = 100;      //initialize the comparator
+  TIMSK1 = 0x03;    //enable comparator A and overflow interrupts
+  TCCR1A = 0x00;    //timer control registers set for normal operation, timer disabled
+  TCCR1B = 0x00;    //timer control registers set for normal operation, timer disabled
+
+  attachInterrupt(digitalPinToInterrupt(zeroCross), zeroCrossClock, RISING); /* flytta till loop? (med detach) om setpoint under x grade hoppa över*/
+
+  init_lcd();
+}
+
+void init_lcd() {
+
+  lcd.init();
+  lcd.backlight();
+
+  lcd.setCursor(3 , 1);
+  lcd.print("COFFE ROASTER");
+  delay(1500);
+  lcd.clear();
+
+  lcd.setCursor(0, 0);
+  lcd.print("TEMP:");
+  lcd.setCursor(0, 1);
+  lcd.print(arrow);
+  lcd.setCursor(1, 1);
+  lcd.print("SET:");
+  lcd.setCursor(1, 2);
+  lcd.print("FAN:");
+  lcd.setCursor(0, 3);
+  lcd.print("DUTY:");
+  lcd.setCursor(13, 0);
+  lcd.print("KP:");
+  lcd.setCursor(13, 1);
+  lcd.print("KI:");
+
+  update_lcd();
+}
+
+void update_lcd() {
+
+  if (lcdUpdate == true) {
+    char c_Input[3];
+    char c_Setpoint[3];
+    char c_Power[3];
+    char c_kp[2];
+    char c_ki[3];
+
+    dtostrf(Input, 3, 0, c_Input);
+    lcd.setCursor(6, 0);
+    lcd.print(c_Input);
+    
+    dtostrf(Power, 3, 0, c_Power);
+    lcd.setCursor(6, 3);
+    lcd.print(c_Power);
+
+    if (Setpoint != lastSetpoint) {
+      lastSetpoint = Setpoint;
+      dtostrf(Setpoint, 3, 0, c_Setpoint);
+      lcd.setCursor(6, 1);
+      lcd.print(c_Setpoint);
+    }
+    if (FanDuty != lastFanDuty) {
+      lastFanDuty = FanDuty;
+      sprintf(buffer, "%3d", FanDuty);
+      lcd.setCursor(6, 2);
+      lcd.print(buffer);
+    }
+    if (kp != lastkp) {
+      lastkp = kp;
+      dtostrf(kp, 2, 0, c_kp);
+      lcd.setCursor(18, 0);
+      lcd.print(c_kp);
+    }
+    if (ki != lastki) {
+      lastki = ki;
+      dtostrf(ki, 2, 1, c_ki);
+      lcd.setCursor(17, 1);
+      lcd.print(c_ki);
+    }
+    if (swCount != last_swCount) {
+      lcd.setCursor(xPos[last_swCount], yPos[last_swCount]);
+      lcd.print(" ");
+      last_swCount = swCount;
+      lcd.setCursor(xPos[swCount], yPos[swCount]);
+      lcd.print(arrow);
+    }
+    lcdUpdate = false;
+  }
+}
+
+
+void zeroCrossClock() { //zero cross detect
+  TCCR1B = 0x04; //start timer with divide by 256 input
+  TCNT1 = 0;   //reset timer - count from zero, compare to OCR1A, trigger timer1_compa_vect
+}
+
+ISR(TIMER1_COMPA_vect) {    //comparator match
+  digitalWrite(triacGate, HIGH); //set TRIAC gate to high
+  TCNT1 = 65535 - 3;    //trigger pulse width, set to 16bit max value - 64ms, triac latching time, overflow to OVF which turnsoff.
+}
+
+ISR(TIMER1_OVF_vect) {    //timer1 overflow
+  digitalWrite(triacGate, LOW); //turn off TRIAC gate
+  TCCR1B = 0x00;          //disable timer stopd unintended triggers
+}
+
+int Compute() {
+
+  float error = Setpoint - Input;
+  pTerm = kp * error;
+  iTerm += ((ki * sampleTime / 1000.0) * error);
+  iTerm = constrain(iTerm, outMin, outMax);
+
+  return pTerm + iTerm;
+}
+
+void loop() {
+  FanValue = map(FanDuty, 0, 100, 0, 255);
+  analogWrite(fanPin, FanValue);
+  {
+    currentTime = millis();
+    elapsedTime = (currentTime - previousTime);
+  }
+  if (elapsedTime >= sampleTime) {
+    previousTime = currentTime;
+    lcdUpdate = true;
+    Input = thermocouple.readCelsius();
+    Output = constrain(Compute(), outMin, outMax);
+    Power = map(Output, outMax, outMin, 100, 0);
+    OCR1A = 600 - Output;
+  }
+
+  ////////////////////////////////////////////
+
+  swState = digitalRead(swPin);
+
+  if (swState != last_swState) {
+    if (swState == HIGH) {
+      lcdUpdate = true;
+      last_swCount = swCount;
+      swCount++;
+      if (swCount > 3) {
+        swCount = 0;
+      }
+    }
+    last_swState = swState;
+  }
+
+  static uint16_t encState = 0;
+  int encCounter = 0;
+  encState = (encState << 1) | digitalRead(clkPin) | 0xe000;
+
+  if (encState == 0xf000) {
+    encState = 0x0000;
+    if (digitalRead(dtPin)) {
+      lcdUpdate = true;
+      encCounter = 1;
+    }
+    else {
+      encCounter = -1;
+    }
+    switch (swCount) {
+      case 0:
+        lastSetpoint = Setpoint;
+        Setpoint = constrain(Setpoint + encCounter * 5, 0, 250);
+        break;
+
+      case 1:
+        lastFanDuty = FanDuty;
+        FanDuty = constrain(FanDuty + encCounter * 5, 0, 100);
+        break;
+
+      case 2:
+        lastkp = kp;
+        kp = constrain(kp + encCounter, 0, 99);
+        break;
+
+      case 3:
+        lastki = ki;
+        ki = constrain(ki + encCounter * 0.1, 0, 9.9);
+        break;
+
+    }
+  }
+  update_lcd();
+}

@@ -1,0 +1,278 @@
+/*
+Zerocross från AC dimmer modul kopplad till D2 med interrupt flagga.
+Startar interrupt timer för att aktivera triac efter viss tid som bestäms av värdet i OCR1A register.
+
+Värdet av OCR1A register styrs av PI(D) rutin som räknas ut från faktisk temperatur (thermocouple) och önskat värde Setpoint
+
+Majoriteten av resterande kod är för LCD display rutin, läsa en rotary encoder och PWM för fläktkontroll.
+*/
+
+
+#include <Wire.h>                     // Library for I2C communication
+#include <max6675.h>                  // Library for Thermocouple
+#include <stdlib.h>
+#include <SSD1306AsciiAvrI2c.h>
+
+//U8GLIB_SSD1306_128X64 oled(U8G_I2C_OPT_NONE);
+SSD1306AsciiAvrI2c oled;
+
+
+//ROBOTDYN AC DIMMER
+#define ZERO_CROSS  2
+#define TRIAC_GATE 3             //initialase port for dimmer: name(PinNumber);
+
+//RobotDyn MOSFET
+#define FAN 5
+unsigned int fanDuty = 0, lastFanDuty;
+
+
+//MAX6675
+#define THERMO_CLK 6
+#define THERMO_CS  7
+#define THERMO_DO  8
+MAX6675 thermocouple(THERMO_CLK, THERMO_CS, THERMO_DO);
+
+//Display updates
+#define U_TEMP_IN 0x01
+#define U_TEMP_SET 0x02
+#define U_FAN 0x04
+#define U_HEAT 0x08
+#define U_SAMPLES 0x10
+#define U_KP 0x20
+#define U_KI 0x40
+#define U_SET 0x80
+uint8_t displayUpdate = 0xff;
+uint16_t nSamples = 0;
+
+#define VALUE_COLUMN 90
+#define LED_RUNNING 4
+#define SW_STOP_MODE 9
+#define SW_START_SET 10
+#define PARAMETER A1
+#define VALUE A0
+
+// States and such
+#define STATE_IDLE 0
+#define STATE_RUNNING 1
+#define SET_SETPOINT 0
+#define SET_KP 1
+#define SET_KI 2
+#define SET_MIN SET_SETPOINT
+#define SET_MAX SET_KI
+unsigned char state = STATE_IDLE;
+unsigned char set = SET_SETPOINT;
+unsigned int parReading = 0, valReading = 0;
+
+/*working variables*/
+unsigned long previousTime, elapsedTime, currentTime;
+unsigned int sampleTime = 62;
+float tempIn, tempOut = 0;
+float tempSetPoint = 100;
+float pTerm, iTerm, dTerm, lastSetpoint = 1;
+float kp = 30.0, ki = 1.2;
+float lastkp = 0.0, lastki = 0.0;
+float outMin = 43, outMax = 557;
+unsigned int power;
+
+void setup() {
+  pinMode(ZERO_CROSS, INPUT_PULLUP);
+  pinMode(TRIAC_GATE, OUTPUT);
+  pinMode(FAN, OUTPUT);
+  pinMode(LED_RUNNING, OUTPUT);
+  pinMode(SW_START_SET, INPUT_PULLUP);
+  pinMode(SW_STOP_MODE, INPUT_PULLUP);
+
+  OCR1A = 100;      //initialize the comparator
+  TIMSK1 = 0x03;    //enable comparator A and overflow interrupts
+  TCCR1A = 0x00;    //timer control registers set for normal operation, timer disabled
+  TCCR1B = 0x00;    //timer control registers set for normal operation, timer disabled
+
+  attachInterrupt(digitalPinToInterrupt(ZERO_CROSS), zeroCrossClock, RISING); /* flytta till loop? (med detach) om setpoint under x grade hoppa över*/
+
+  init_lcd();
+}
+
+void init_lcd() {
+
+    oled.begin(&Adafruit128x64, 0x3C);
+    oled.setFont(System5x7);
+    oled.clear();
+    oled.println("Temperature: ");
+    oled.println("Set point: ");
+    oled.println("Fan duty: ");
+    oled.println("Heat power: ");
+    oled.println("Samples: ");
+    oled.println("kP: ");
+    oled.println("kI: ");
+
+    update_lcd();
+}
+
+void prepare_lcd(unsigned int row) {
+    oled.setInvertMode(false);
+    oled.setRow(row);
+    oled.setCol(VALUE_COLUMN);
+    oled.print("      ");
+    oled.setCol(VALUE_COLUMN);
+}
+
+int lcd_update = 0;
+void update_lcd() {
+    if (lcd_update++ < 1000) {
+        return;
+    }
+    lcd_update = 0;
+    if (displayUpdate & U_SET) {
+        displayUpdate = ~U_SET;
+    }
+
+    if (displayUpdate & U_TEMP_IN) {
+        prepare_lcd(0);
+        oled.print(tempIn);
+        displayUpdate &= ~U_TEMP_IN;
+    }
+    if (displayUpdate & U_TEMP_SET) {
+        prepare_lcd(1);
+        oled.setInvertMode(set == SET_SETPOINT);
+        oled.print(tempSetPoint);
+        displayUpdate &= ~U_TEMP_SET;
+    }
+    if (displayUpdate & U_FAN) {
+        prepare_lcd(2);
+        oled.print(fanDuty);
+        displayUpdate &= ~U_FAN;
+    }
+    if (displayUpdate & U_HEAT) {
+        prepare_lcd(3);
+        oled.print(power);
+        displayUpdate &= ~U_HEAT;
+    }
+    if (displayUpdate & U_SAMPLES) {
+        prepare_lcd(4);
+        oled.print(nSamples);
+        displayUpdate &= ~U_SAMPLES;
+    }
+    if (displayUpdate & U_KP) {
+        prepare_lcd(5);
+        oled.setInvertMode(set == SET_KP);
+        oled.print(kp);
+        displayUpdate &= ~U_KP;
+    }
+    if (displayUpdate & U_KI) {
+        prepare_lcd(6);
+        oled.setInvertMode(set == SET_KI);
+        oled.print(ki);
+        displayUpdate &= ~U_KI;
+    }
+}
+
+
+void zeroCrossClock() { //zero cross detect
+  TCCR1B = 0x04; //start timer with divide by 256 input
+  TCNT1 = 0;   //reset timer - count from zero, compare to OCR1A, trigger timer1_compa_vect
+}
+
+ISR(TIMER1_COMPA_vect) {    //comparator match
+  digitalWrite(TRIAC_GATE, HIGH); //set TRIAC gate to high
+  TCNT1 = 65535 - 3;    //trigger pulse width, set to 16bit max value - 64ms, triac latching time, overflow to OVF which turnsoff.
+}
+
+ISR(TIMER1_OVF_vect) {    //timer1 overflow
+  digitalWrite(TRIAC_GATE, LOW); //turn off TRIAC gate
+  TCCR1B = 0x00;          //disable timer stopd unintended triggers
+}
+
+int Compute() {
+
+  float error = tempSetPoint - tempIn;
+  pTerm = kp * error;
+  iTerm += ((ki * sampleTime / 1000.0) * error);
+  iTerm = constrain(iTerm, outMin, outMax);
+
+  return pTerm + iTerm;
+}
+
+void readPar() {
+    unsigned int newParReading = analogRead(PARAMETER);
+    if (abs(parReading - newParReading) < 16) {
+        return;
+    }
+    parReading = newParReading;
+    unsigned char oldSet = set;
+    set = map(parReading, 0, 1023, SET_MIN, SET_MAX);
+    if (oldSet != set) {
+        displayUpdate |= U_SET;
+    }
+}
+
+void readVal() {
+    unsigned int newValReading = analogRead(VALUE);
+    if (abs(valReading - newValReading) < 16) {
+        return;
+    }
+    valReading = newValReading;
+    switch (set) {
+        case SET_SETPOINT:
+            tempSetPoint = map(valReading, 0, 1023, 0, 400);
+            displayUpdate |= U_TEMP_SET;
+            break;
+        case SET_KP:
+            kp = ((float)map(valReading, 0, 1023, 0, 1000))/10.;
+            displayUpdate |= U_KP;
+            break;
+        case SET_KI:
+            ki = ((float)map(valReading, 0, 1023, 0, 1000))/100.;
+            displayUpdate |= U_KI;
+            break;
+    }
+}
+
+void loop() {
+    currentTime = millis();
+    elapsedTime = (currentTime - previousTime);
+
+    if (digitalRead(SW_START_SET) == LOW) {
+        state = STATE_RUNNING;
+        digitalWrite(LED_RUNNING, HIGH);
+    }
+
+    if (elapsedTime >= sampleTime) {
+        previousTime = currentTime;
+        float tempInPrev = tempIn;
+        tempIn = thermocouple.readCelsius();
+        if (abs(tempIn - tempInPrev) > 0.5) {
+            displayUpdate |= U_TEMP_IN;
+        }
+
+        bool fanChanged = false;
+        if (tempIn > 300. && fanDuty < 230) {
+            fanDuty = 230;
+            fanChanged = true;
+        } else if (tempIn > 50.) {
+            fanDuty = map(tempIn, 50, 300, 25, 230);
+            fanChanged = true;
+        } else if (fanDuty > 0) {
+            fanDuty = 0;
+            fanChanged = true;
+        }
+        if (fanChanged) {
+            displayUpdate |= U_FAN;
+            analogWrite(FAN, fanDuty);
+        }
+
+        tempOut = constrain(Compute(), outMin, outMax);
+        unsigned int powerLast = power;
+        power = map(tempOut, outMax, outMin, 100, 0);
+        if (power != powerLast) {
+            displayUpdate |= U_HEAT;
+        }
+        OCR1A = 600 - tempOut;
+        nSamples++;
+        displayUpdate |= U_SAMPLES;
+
+        readPar();
+        readVal();
+    }
+
+    update_lcd();
+}
