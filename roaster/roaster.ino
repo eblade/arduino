@@ -58,13 +58,13 @@ unsigned int lastA = 0, lastB = 0;
 
 /*working variables*/
 unsigned long previousTime, elapsedTime, currentTime;
-unsigned int sampleTime = 500;
+unsigned int sampleTime = 250;
 float tempIn, tempOut = 0;
 float tempSetPoint = 100;
 float pTerm, iTerm, dTerm, lastSetpoint = 1;
 float kp = 30.0, ki = 1.2;
 float lastkp = 0.0, lastki = 0.0;
-float outMin = 10, outMax = 557;
+float outMin = 0, outMax = 247;
 unsigned int power;
 
 void setup() {
@@ -110,11 +110,6 @@ void prepare_lcd(unsigned int row) {
 
 int lcd_update = 0;
 void update_lcd() {
-    if (lcd_update++ < 1000) {
-        return;
-    }
-    lcd_update = 0;
-
     if (displayUpdate & U_TEMP_IN) {
         prepare_lcd(0);
         oled.print(tempIn);
@@ -159,14 +154,13 @@ bool blink() {
 }
 
 void zeroCrossClock() { //zero cross detect
-  digitalWrite(TRIAC_GATE, HIGH); //set TRIAC gate to high
   TCCR1B = 0x04; //start timer with divide by 256 input
   TCNT1 = 0;   //reset timer - count from zero, compare to OCR1A, trigger timer1_compa_vect
 }
 
 ISR(TIMER1_COMPA_vect) {    //comparator match
   //digitalWrite(LED_RUNNING, blink());
-  digitalWrite(TRIAC_GATE, LOW); //set TRIAC gate to high
+  digitalWrite(TRIAC_GATE, HIGH); //set TRIAC gate to high
   TCNT1 = 65535 - 3;    //trigger pulse width, set to 16bit max value - 64ms, triac latching time, overflow to OVF which turnsoff.
 }
 
@@ -208,36 +202,31 @@ void readB() {
 
 void loop() {
     digitalWrite(LED_RUNNING, blink());
-    currentTime = millis();
-    elapsedTime = (currentTime - previousTime);
 
     if (digitalRead(SW_START_SET) == LOW) {
         state = STATE_RUNNING;
         digitalWrite(LED_RUNNING, HIGH);
     }
 
-    if (elapsedTime >= sampleTime) {
-        previousTime = currentTime;
-        float tempInPrev = tempIn;
-        tempIn = thermocouple.readCelsius();
-        if (abs(tempIn - tempInPrev) > 0.5) {
-            displayUpdate |= U_TEMP_IN;
-        }
-
-        tempOut = constrain(compute(), outMin, outMax);
-        unsigned int powerLast = power;
-        power = map(tempOut, outMax, outMin, 100, 0);
-        if (power != powerLast) {
-            displayUpdate |= U_HEAT;
-        }
-        OCR1A = (unsigned int)tempOut;
-        //OCR1A = 10;
-        nSamples++;
-        displayUpdate |= U_SAMPLES;
-
-        readA();
-        readB();
+    float tempInPrev = tempIn;
+    tempIn = thermocouple.readCelsius();
+    if (abs(tempIn - tempInPrev) > 0.5) {
+        displayUpdate |= U_TEMP_IN;
     }
 
+    tempOut = constrain(compute(), outMin, outMax);
+    unsigned int powerLast = power;
+    power = map(tempOut, outMax, outMin, 100, 0);
+    if (power != powerLast) {
+        displayUpdate |= U_HEAT;
+    }
+    OCR1A = 290 - (unsigned int)tempOut;
+    nSamples++;
+    displayUpdate |= U_SAMPLES;
+
+    readA();
+    readB();
+
     update_lcd();
+    delay(100);
 }
