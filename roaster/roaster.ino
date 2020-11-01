@@ -192,7 +192,7 @@ void readB() {
         return;
     }
     lastB = newB;
-    tempSetPoint = map(newB, 0, 1023, 40, 400);
+    tempSetPoint = (float)(((uint16_t)map(newB, 0, 1023, 180, 244)) / 5 * 5);
     displayUpdate |= U_TEMP_SET;
 }
 
