@@ -9,10 +9,10 @@ Majoriteten av resterande kod är för LCD display rutin, läsa en rotary encode
 
 
 #include <max6675.h>                  // Library for Thermocouple
-#include <SSD1306AsciiAvrI2c.h>
+//#include <SSD1306AsciiAvrI2c.h>
 
 //U8GLIB_SSD1306_128X64 oled(U8G_I2C_OPT_NONE);
-SSD1306AsciiAvrI2c oled;
+//SSD1306AsciiAvrI2c oled;
 
 
 //ROBOTDYN AC DIMMER
@@ -79,69 +79,70 @@ void setup() {
 
     attachInterrupt(digitalPinToInterrupt(ZERO_CROSS), zeroCrossClock, RISING); /* flytta till loop? (med detach) om setpoint under x grade hoppa över*/
 
-    readA();
-    init_lcd();
+    //readA();
+    //init_lcd();
+    analogWrite(FAN, fanDuty);
 }
 
-void init_lcd() {
-    oled.begin(&Adafruit128x64, 0x3C);
-    oled.setFont(System5x7);
-    oled.clear();
-    oled.println("Temperature: ");
-    oled.println("Set point: ");
-    oled.println("Fan duty: ");
-    oled.println("Heat power: ");
-    oled.println("Samples: ");
-    oled.println("kP: ");
-    oled.println("kI: ");
-}
+//void init_lcd() {
+//    oled.begin(&Adafruit128x64, 0x3C);
+//    oled.setFont(System5x7);
+//    oled.clear();
+//    oled.println("Temperature: ");
+//    oled.println("Set point: ");
+//    oled.println("Fan duty: ");
+//    oled.println("Heat power: ");
+//    oled.println("Samples: ");
+//    oled.println("kP: ");
+//    oled.println("kI: ");
+//}
 
-void prepare_lcd(unsigned int row) {
-    oled.setRow(row);
-    oled.setCol(VALUE_COLUMN);
-    oled.print("      ");
-    oled.setCol(VALUE_COLUMN);
-}
+//void prepare_lcd(unsigned int row) {
+//    oled.setRow(row);
+//    oled.setCol(VALUE_COLUMN);
+//    oled.print("      ");
+//    oled.setCol(VALUE_COLUMN);
+//}
 
-void update_lcd() {
-    //displayUpdate = 0xff;
-    if (displayUpdate & U_TEMP_IN) {
-        prepare_lcd(0);
-        oled.print((uint16_t)measuredTemp);
-        displayUpdate &= ~U_TEMP_IN;
-    }
-    if (displayUpdate & U_TEMP_SET) {
-        prepare_lcd(1);
-        oled.print((uint16_t)tempSetPoint);
-        displayUpdate &= ~U_TEMP_SET;
-    }
-    if (displayUpdate & U_HEAT) {
-        prepare_lcd(3);
-        oled.print(heat);
-        displayUpdate &= ~U_HEAT;
-    }
-    return;
-    if (displayUpdate & U_FAN) {
-        prepare_lcd(2);
-        oled.print(fanDuty);
-        displayUpdate &= ~U_FAN;
-    }
-   // if (displayUpdate & U_SAMPLES) {
-   //     prepare_lcd(4);
-   //     oled.print(nSamples);
-   //     displayUpdate &= ~U_SAMPLES;
-   // }
-    if (displayUpdate & U_KP) {
-        prepare_lcd(5);
-        oled.print((uint16_t)pTerm);
-        displayUpdate &= ~U_KP;
-    }
-    if (displayUpdate & U_KI) {
-        prepare_lcd(6);
-        oled.print((uint16_t)iTerm);
-        displayUpdate &= ~U_KI;
-    }
-}
+//void update_lcd() {
+//    //displayUpdate = 0xff;
+//    if (displayUpdate & U_TEMP_IN) {
+//        prepare_lcd(0);
+//        oled.print((uint16_t)measuredTemp);
+//        displayUpdate &= ~U_TEMP_IN;
+//    }
+//    if (displayUpdate & U_TEMP_SET) {
+//        prepare_lcd(1);
+//        oled.print((uint16_t)tempSetPoint);
+//        displayUpdate &= ~U_TEMP_SET;
+//    }
+//    if (displayUpdate & U_HEAT) {
+//        prepare_lcd(3);
+//        oled.print(heat);
+//        displayUpdate &= ~U_HEAT;
+//    }
+//    return;
+//    if (displayUpdate & U_FAN) {
+//        prepare_lcd(2);
+//        oled.print(fanDuty);
+//        displayUpdate &= ~U_FAN;
+//    }
+//   // if (displayUpdate & U_SAMPLES) {
+//   //     prepare_lcd(4);
+//   //     oled.print(nSamples);
+//   //     displayUpdate &= ~U_SAMPLES;
+//   // }
+//    if (displayUpdate & U_KP) {
+//        prepare_lcd(5);
+//        oled.print((uint16_t)pTerm);
+//        displayUpdate &= ~U_KP;
+//    }
+//    if (displayUpdate & U_KI) {
+//        prepare_lcd(6);
+//        oled.print((uint16_t)iTerm);
+//        displayUpdate &= ~U_KI;
+//    }
+//}
 
 
 volatile bool _blink = 0;
@@ -175,16 +176,16 @@ int16_t compute() {
   return (int16_t)(pTerm + iTerm);
 }
 
-void readA() {
-    uint16_t newA = analogRead(PARAMETER);
-    if (abs(lastA - newA) < 16) {
-        return;
-    }
-    lastA = newA;
-    fanDuty = map(newA, 0, 1023, 25, 255);
-    analogWrite(FAN, fanDuty);
-    displayUpdate |= U_FAN;
-}
+//void readA() {
+//    uint16_t newA = analogRead(PARAMETER);
+//    if (abs(lastA - newA) < 16) {
+//        return;
+//    }
+//    lastA = newA;
+//    fanDuty = map(newA, 0, 1023, 25, 255);
+//    analogWrite(FAN, fanDuty);
+//    displayUpdate |= U_FAN;
+//}
 
 void readB() {
     uint16_t newB = analogRead(VALUE);
@@ -197,6 +198,7 @@ void readB() {
 }
 
 void loop() {
+    bool is_at_set;
     digitalWrite(LED_RUNNING, blink());
 
     if (digitalRead(SW_START_SET) == LOW) {
@@ -210,17 +212,30 @@ void loop() {
         displayUpdate |= U_TEMP_IN;
     }
 
+    is_at_set = abs(measuredTemp - tempSetPoint) < 4;
+
     heat = constrain(compute(), outMin, outMax);
     nSamples++;
     displayUpdate |= U_SAMPLES;
     displayUpdate |= U_KI | U_KP;
 
-    if (digitalRead(SW_STOP_MODE) == LOW) {
-        readA();
-    }
+    //if (digitalRead(SW_STOP_MODE) == LOW) {
+    //    readA();
+    //}
 
     readB();
 
-    update_lcd();
-    delay(100);
+    //update_lcd();
+    if (is_at_set) {
+        delay(100);
+    } else {
+        delay(25);
+        digitalWrite(LED_RUNNING, blink());
+        delay(25);
+        digitalWrite(LED_RUNNING, blink());
+        delay(25);
+        digitalWrite(LED_RUNNING, blink());
+        delay(25);
+        digitalWrite(LED_RUNNING, blink());
+    }
 }
