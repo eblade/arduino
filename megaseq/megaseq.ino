@@ -30,6 +30,8 @@ uint16_t stepOutCycles = 0;
 int16_t pulseLen = 5;
 int16_t extPosRaw = 0;
 int8_t extPos = -1;
+int16_t intPosRaw = 0;
+int8_t intPos = -1;
 int16_t intRate = 0;
 int16_t intRateCycles = 1;
 int16_t intRateCyclesOn = 0;
@@ -71,6 +73,8 @@ void loop() {
     step = -1;
   }
   pulseLen = analogRead(PULSE_LENGTH_PIN);
+  intPosRaw = analogRead(INT_POS_5V_PIN);
+  intPos = map(intPosRaw, 0, 1000, -1, 15);
   extPosRaw = analogRead(EXT_POS_5V_PIN);
   extPos = map(extPosRaw, 200, 1023, -1, 15);
   intRate = 1100 - analogRead(RATE_5V_PIN);
@@ -103,7 +107,9 @@ void updateOutputs() {
 }
 
 void handleExtClockIn() {
-  if (extPos > -1) {
+  if (intPos > -1) {
+    step = intPos;
+  } else if (extPos > -1) {
     step = extPos;
   } else {
     switch (direction) {
